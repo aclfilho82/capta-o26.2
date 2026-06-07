@@ -247,6 +247,12 @@ canvas{width:100%;max-height:410px} .grid2{display:grid;grid-template-columns:1.
   }
 </style>
 
+
+<style id="firebase-v9-css">
+.save-status{position:fixed;right:18px;bottom:18px;z-index:10000;background:#152033;color:#fff;padding:10px 14px;border-radius:999px;font-size:13px;font-weight:800;box-shadow:0 8px 24px rgba(0,0,0,.22);opacity:.94}
+.save-status.ok{background:#047857}.save-status.err{background:#b42318}
+</style>
+
 </head>
 <body>
 <header><h1>Projeção de Captação — 25.2 x 26.2</h1><p>Projeção iniciando em <strong>junho</strong> e seguindo até <strong>outubro/2026</strong>, calculada pelo ritmo atual de 26.2. Considera apenas dias úteis, de segunda a sexta. As colunas <strong>25.2</strong> e <strong>26.2</strong> são editáveis. A projeção final agora é comparada com a <strong>Meta Geral 2026.2</strong>.</p></header>
@@ -732,6 +738,150 @@ if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",
   updateMonthWeights();
   setTimeout(()=>{bindWeights(); updateAll(true); if(typeof updateManagerCards==="function") updateManagerCards();}, 100);
 })();
+</script>
+
+<div id="saveStatus" class="save-status">Conectando ao Firebase...</div>
+
+<script type="module" id="firebase-v9-js">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAOVJIo1-I3KcYvg0zvGw6Hg4HB8LKpcx4",
+  authDomain: "capta-2ebc0.firebaseapp.com",
+  projectId: "capta-2ebc0",
+  storageBucket: "capta-2ebc0.firebasestorage.app",
+  messagingSenderId: "58347402048",
+  appId: "1:58347402048:web:7b4e0fb695b4b8fa0700a5",
+  measurementId: "G-NDJ62HF7K7"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const painelRef = doc(db, "captacao", "painel_26_2");
+
+let firebaseReady = false;
+let saveTimer = null;
+let loadingFirebase = false;
+
+function setStatus(text, type=""){
+  const el = document.getElementById("saveStatus");
+  if(!el) return;
+  el.textContent = text;
+  el.className = "save-status" + (type ? " " + type : "");
+}
+
+function snapshotPainel(){
+  return {
+    data: window.data || data,
+    monthLocks: window.monthLocks || monthLocks,
+    lockedMonthValues: window.lockedMonthValues || lockedMonthValues,
+    monthWeights: window.monthWeights || [0.8,1.4,1.2,0.9,0.7],
+    updatedAt: serverTimestamp()
+  };
+}
+
+window.saveToFirebaseNow = async function(){
+  if(!firebaseReady || loadingFirebase) return;
+  try{
+    setStatus("Salvando...");
+    await setDoc(painelRef, snapshotPainel(), { merge:true });
+    setStatus("Salvo na nuvem", "ok");
+  }catch(err){
+    console.error("Erro ao salvar no Firebase:", err);
+    setStatus("Erro ao salvar", "err");
+  }
+};
+
+window.scheduleFirebaseSave = function(){
+  if(!firebaseReady || loadingFirebase) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(()=>window.saveToFirebaseNow(), 700);
+};
+
+window.loadFromFirebase = async function(){
+  loadingFirebase = true;
+  try{
+    setStatus("Carregando dados...");
+    const snap = await getDoc(painelRef);
+
+    if(snap.exists()){
+      const saved = snap.data();
+
+      if(Array.isArray(saved.data)){
+        data.length = 0;
+        saved.data.forEach(item => data.push(item));
+        window.data = data;
+      }
+
+      if(Array.isArray(saved.monthLocks)){
+        monthLocks = saved.monthLocks;
+        window.monthLocks = monthLocks;
+      }
+
+      if(saved.lockedMonthValues && typeof saved.lockedMonthValues === "object"){
+        lockedMonthValues = saved.lockedMonthValues;
+        window.lockedMonthValues = lockedMonthValues;
+      }
+
+      if(Array.isArray(saved.monthWeights)){
+        window.monthWeights = saved.monthWeights;
+        const ids = ["wJun","wJul","wAgo","wSet","wOut"];
+        ids.forEach((id,i)=>{
+          const el = document.getElementById(id);
+          if(el) el.value = saved.monthWeights[i];
+        });
+        if(typeof updateMonthWeights === "function") updateMonthWeights();
+      }
+    }else{
+      await setDoc(painelRef, snapshotPainel(), { merge:true });
+    }
+
+    if(typeof recalcularConsolidadores === "function") recalcularConsolidadores();
+    if(typeof refreshLockButtons === "function") refreshLockButtons();
+    if(typeof renderTable === "function") renderTable();
+    if(typeof updateAll === "function") updateAll(true);
+    if(typeof updateManagerCards === "function") updateManagerCards();
+
+    firebaseReady = true;
+    setStatus("Salvo na nuvem", "ok");
+  }catch(err){
+    console.error("Erro ao carregar Firebase:", err);
+    setStatus("Erro Firebase", "err");
+  }finally{
+    loadingFirebase = false;
+  }
+};
+
+function wrapFunction(name){
+  const original = window[name];
+  if(typeof original !== "function" || original.__firebaseWrapped) return;
+  const wrapped = function(...args){
+    const result = original.apply(this, args);
+    window.scheduleFirebaseSave();
+    return result;
+  };
+  wrapped.__firebaseWrapped = true;
+  window[name] = wrapped;
+}
+
+setTimeout(()=>{
+  wrapFunction("toggleMonthLock");
+  wrapFunction("resetValues");
+  wrapFunction("setSortMode");
+
+  document.addEventListener("input", (e)=>{
+    if(e.target && (
+      e.target.classList.contains("edit25") ||
+      e.target.classList.contains("edit26") ||
+      ["wJun","wJul","wAgo","wSet","wOut"].includes(e.target.id)
+    )){
+      window.scheduleFirebaseSave();
+    }
+  });
+
+  window.loadFromFirebase();
+}, 700);
 </script>
 
 </body></html>
